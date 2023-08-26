@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  avito-db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: avito_db
+      POSTGRES_USER: avito_user
+      POSTGRES_PASSWORD: avito_password
+    ports:
+      - "5434:5432"
+    volumes:
+      - avito-pg-data:/var/lib/postgresql/data
+
+  avito-test-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      - avito-db
+
+volumes:
+  avito-pg-data:
