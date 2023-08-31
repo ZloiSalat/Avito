@@ -8,71 +8,47 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 )
 
-const DBUrl = "postgres://avito_user:avito_password@localhost:5434/avito_db"
-
-var db *pgx.Conn
+const DBUrl = "postgres://avito_user:avito_password@db:5432/avito_db"
 
 type Segment struct {
 	ID      int    `json:"id"`
 	Segment string `json:"slug"`
 }
 
-func CreateSegment(c *gin.Context) {
-	var segment Segment
-	c.BindJSON(&segment)
+var db *pgx.Conn
 
-	_, err := db.Exec(context.Background(), "INSERT INTO segments (segment_name) VALUES ($1)", segment.Segment)
+func CreateSegment(c *gin.Context) {
+
+	var segment Segment
+	err := c.BindJSON(&segment)
 	if err != nil {
-		panic(err)
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Unable to create a request"})
+		return
+	}
+	//Запрос на внесение названия сегмента в столбец segment_name в таблице segments.
+	_, err = db.Exec(context.Background(), "INSERT INTO segments (segment_name) VALUES ($1)", segment.Segment)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Unable to create a segment"})
+		return
 	}
 
 	c.JSON(201, gin.H{"message": "Segment created successfully!"})
 }
 
 func DeleteSegment(c *gin.Context) {
+
 	slug := c.Param("slug")
-	_, err := db.Exec(context.Background(), "DELETE FROM segments WHERE segment_name=$1", slug)
+	//Запрос на удаление сегмента по названию (slug) сегмента.
+	_, err := db.Exec(context.Background(), "delete from segments where segment_name=$1", slug)
 	if err != nil {
-		panic(err)
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Unable to delete a request"})
+		return
 	}
 
 	c.JSON(200, gin.H{"message": "Segment deleted successfully!"})
-}
-
-func getSegmentIDByUserID(UserID string) ([]int, error) {
-	var segmentId []int
-
-	query := "SELECT segment_id FROM user_segments WHERE user_id = $1;"
-	intUserID, _ := strconv.Atoi(UserID)
-	//result, err := db.Exec(context.Background(), `Delete from t where col=$1`, "val")
-	rows, err := db.Query(context.Background(), query, intUserID)
-	if err != nil {
-		log.Fatal("Error querying database:", err)
-	}
-	log.Println(&rows)
-
-	defer rows.Close()
-
-	for rows.Next() {
-		var segment int
-		err := rows.Scan(&segment)
-		log.Println(segment)
-		if err != nil {
-			log.Fatal("Error scanning rows:", err)
-		}
-		segmentId = append(segmentId, segment)
-	}
-	log.Println(segmentId)
-	if err := rows.Err(); err != nil {
-		log.Fatal("Error iterating rows:", err)
-	}
-
-	return segmentId, err
-
 }
 
 func AddUserToSegment(c *gin.Context) {
@@ -83,18 +59,23 @@ func AddUserToSegment(c *gin.Context) {
 		RemoveSegments []string `json:"remove_segments"`
 	}
 
-	c.BindJSON(&request)
-
+	err := c.BindJSON(&request)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Unable to create a request"})
+		return
+	}
+	//Проверка на заполненность строк.
 	if len(request.AddSegments) == 0 && len(request.RemoveSegments) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "No actions with segments"})
 		return
 	}
 
 	if len(request.AddSegments) != 0 {
-		addQuery := "SELECT s.id FROM segments s left join user_segments us on s.id = us.segment_id and user_id = $1 where us.segment_id is null and s.segment_name = any($2);"
+		//Запрос на проверку существующих сегментов, чтобы отсеять повторяющиеся сегменты.
+		addQuery := "select s.id FROM segments s left join user_segments us on s.id = us.segment_id and user_id = $1 where us.segment_id is null and s.segment_name = any($2);"
 		rows, err := db.Query(context.Background(), addQuery, request.UserID, request.AddSegments)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"Query message error": err.Error()})
 			return
 		}
 
@@ -107,7 +88,7 @@ func AddUserToSegment(c *gin.Context) {
 			if err != nil {
 				log.Fatal(err)
 			}
-
+			//Форматирование результатов
 			result += fmt.Sprintf("(%d, %d), ", request.UserID, answer)
 
 		}
@@ -115,22 +96,22 @@ func AddUserToSegment(c *gin.Context) {
 			log.Fatal(err)
 		}
 		result = strings.TrimSuffix(result, ", ")
-		log.Println(result)
+		//Запрос на внесение данных по значениям user_id и segment_id
+		insertQuery := fmt.Sprintf("insert into user_segments (user_id, segment_id) values %s;", result)
 
-		hueusQuery := fmt.Sprintf("insert into user_segments (user_id, segment_id) values %s;", result)
-
-		_, err = db.Exec(context.Background(), hueusQuery)
+		_, err = db.Exec(context.Background(), insertQuery)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"Insert message error": err.Error()})
 			return
 		}
 	}
 
 	if len(request.RemoveSegments) != 0 {
-		getDeleteSegment := "SELECT s.id FROM segments s where s.segment_name = any($1);"
+		//Запрос на проверку существующих сегментов, чтобы отсеять повторяющиеся сегменты.
+		getDeleteSegment := "select s.id from segments s where s.segment_name = any($1);"
 		deleteRows, err := db.Query(context.Background(), getDeleteSegment, request.RemoveSegments)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"getDelete message error: ": err.Error()})
 			return
 		}
 
@@ -150,12 +131,12 @@ func AddUserToSegment(c *gin.Context) {
 		if err := deleteRows.Err(); err != nil {
 			log.Fatal(err)
 		}
-
-		deleteQuery := "DELETE FROM user_segments WHERE segment_id = any($1) and user_id = $2;"
+		//Удаление сегментов
+		deleteQuery := "delete from user_segments where segment_id = any($1) and user_id = $2;"
 
 		_, err = db.Exec(context.Background(), deleteQuery, idSlice, request.UserID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"Delete message error": err.Error()})
 			return
 		}
 	}
@@ -166,12 +147,11 @@ func AddUserToSegment(c *gin.Context) {
 func GetActiveSegments(c *gin.Context) {
 	userID := c.Param("id")
 
-	//query := "select segment_id from user_segments where user_id = $1;"
-	query := `SELECT s.segment_name
-			  FROM segments s
-			  INNER JOIN user_segments us ON s.id = us.segment_id
-			  WHERE us.user_id = $1;`
-
+	query := `select s.segment_name
+			  from segments s
+			  inner join user_segments us on s.id = us.segment_id
+			  where us.user_id = $1;`
+	//Получение активных сегментов по номеру id
 	rows, err := db.Query(context.Background(), query, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -193,13 +173,12 @@ func GetActiveSegments(c *gin.Context) {
 }
 
 func NewClient() {
-
+	//Подключение к базе данных
 	conn, err := pgx.Connect(context.Background(), DBUrl)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
 		os.Exit(1)
 	}
-	//defer conn.Close(context.Background())
 	db = conn
 	log.Println("Connected successfully!")
 
@@ -208,16 +187,15 @@ func NewClient() {
 func main() {
 	NewClient()
 	r := gin.Default()
-	r.GET("/ping", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"message": "Привет, я Gin",
-		})
-	})
 
 	r.POST("/segment", CreateSegment)
-	r.POST("/user2segment", AddUserToSegment)
+	r.POST("/manageUserSegments", AddUserToSegment)
 	r.GET("/segments/:id", GetActiveSegments)
 	r.DELETE("/segment/:slug", DeleteSegment)
-	r.Run(":8000")
+	err := r.Run(":8000")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Unable to open a port: %v\n", err)
+		return
+	}
 
 }
